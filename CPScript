@@ -1,0 +1,536 @@
+# sample script that goes from Avy point layers to final sample analysis
+
+# import directories
+import arcpy
+from arcpy.sa import *
+print("imported modules")
+
+print("establishing parameters ... ")
+# set master workspace and overwrite conditions
+arcpy.env.workspace = "C:\\Users\\Emma Tyrrell\\Documents\\PSU_SDS\\THESIS_230226\\Data\\WorkingData"
+gdbName = "C:\\Users\\Emma Tyrrell\\Documents\\PSU_SDS\\THESIS_230226\\Data\\StaticDataGDB.gdb"
+projectBoundary = gdbName + "\\ProjectBoundary"
+outputData = arcpy.env.workspace + "\\OutputProcessing"
+mosaicBit = 1
+mosaicPixelType = "32_BIT_FLOAT"
+GCSsr = arcpy.SpatialReference(4326)
+PCSsr = arcpy.SpatialReference(6431)
+arcpy.env.overwriteOutput = True
+arcpy.env.qualifiedFieldNames = False
+print("parameters established.")
+
+print("creating avalanche point class ... ")
+try:
+    # create points from .csv file
+    AvyTable = arcpy.env.workspace + "\\AvyData\\CAICAvyExplorer_data.csv"
+    AvyDataWorkspace = arcpy.env.workspace + "\\AvyData"
+    outAvyPointClass = outputData + "\\AvyPointClass.shp"
+    projectedAvyOutPointClass = outputData + "\\AvyPointClass_projected.shp"
+    masterAvyPointClass = AvyDataWorkspace + "\\MasterAvyPointClass.shp"
+    xField = "X_Coord"
+    yField = "Y_Coord"
+    try:
+        # run tool for XY class
+        arcpy.XYTableToPoint_management(AvyTable, outAvyPointClass, xField, yField, "", GCSsr)
+        print("- point class created")
+
+        # project class into proper coordinate system
+        arcpy.Project_management(outAvyPointClass, projectedAvyOutPointClass, PCSsr)
+        print("- coordinate system projected")
+
+        # add field that will be in accordance with the date field
+        # clip points to boundary to create master file
+        arcpy.Clip_analysis(projectedAvyOutPointClass, projectBoundary, masterAvyPointClass)
+        print("- clipped avy feature")
+    except Exception as ex:
+        print(ex)
+    try:
+        roadsWorkspace = arcpy.env.workspace + "\\AdminData\\Roads"
+        highways = roadsWorkspace + "\\Highways_clip.shp"
+        majorRoads = roadsWorkspace + "\\MajorRoads_clip.shp"
+        localRoads = roadsWorkspace + "\\LocalRoads_clip.shp"
+
+        # create highway buffers
+        highway_buffer = roadsWorkspace + "\\HighwayBuffer100m.shp"
+        arcpy.Buffer_analysis(highways, highway_buffer, "100 meters", "FULL", "ROUND")
+        print("- highway buffer created")
+
+        # merge all roads layers
+        allRoads = roadsWorkspace + "\\AllRoads.shp"
+        arcpy.Merge_management([highways, majorRoads, localRoads], allRoads)
+        print("- roads merged")
+
+        # create roads buffer
+        allRoads_buffer = roadsWorkspace + "\\RoadsBuffer100m.shp"
+        arcpy.Buffer_analysis(allRoads, allRoads_buffer, "100 meters", "FULL", "ROUND")
+        print("- all roads buffer created")
+
+        # clip avy points to buffer, make highway avalanches
+        highwayAvyData = AvyDataWorkspace + "\\HighwayAvalanches.shp"
+        arcpy.Clip_analysis(masterAvyPointClass, highway_buffer, highwayAvyData)
+        print("- highway avalanches class created")
+    except Exception as ex:
+        print(ex)
+
+    # delete unclipped data
+    arcpy.Delete_management([projectedAvyOutPointClass, outAvyPointClass])
+    print("- deleted unclipped data")
+except Exception as ex:
+    print(ex)
+print("Highway avalanches and all avy point classes created. Nice!")
+
+# slope and aspect on mosaic data set
+print("creating slope, aspect, and curvature fields ...")
+try:
+    demMosaic = gdbName + "\\demMosaic2"
+    demFiles = arcpy.env.workspace + "\\DEM"
+    terrainWorkspace = arcpy.env.workspace + "\\Terrain"
+    try:
+        # set slope parameters
+        arcpy.CheckOutExtension("Spatial")
+        outMeasurement = "DEGREE"
+        slope = gdbName + "\\slope"
+        slopePolygons = terrainWorkspace + "\\AvySlope_Polygons.shp"
+        slope_clipped = terrainWorkspace + "\\Slope_Clipped.tif"
+        slopeReclass = terrainWorkspace + "\\Slope_Reclassified.tif"
+
+        # create slope
+        outSlope = Slope(demMosaic, outMeasurement)
+        outSlope.save(slope)
+        print("- slope created")
+        arcpy.Clip_management(slope, projectBoundary, slope_clipped)
+        print("- slope clipped")
+
+        # reclass slope and make them polygons
+        reclass_Slope = Reclassify(slope_clipped, "Value", RemapRange([[0, 25, "NODATA"], [25, 30, 1], [30, 35, 2],
+                                                                       [35, 40, 3], [40, 45, 4], [45, 50, 5],
+                                                                       [50, 55, 6], [55, 60, 7], [60, 90, "NODATA"]]))
+        reclass_Slope.save(slopeReclass)
+        print("- rasters reclassified")
+
+        # create slope polygons
+        arcpy.RasterToPolygon_conversion(slopeReclass, slopePolygons)
+        print("- slope polygons created")
+    except Exception as ex:
+        print(ex)
+    try:
+        # set aspect parameters
+        arcpy.CheckOutExtension("Spatial")
+        aspect = gdbName + "\\aspect"
+        aspect_clipped = terrainWorkspace + "\\Aspect_Clipped.tif"
+        aspectReclass = terrainWorkspace + "\\Aspect_Reclassified.tif"
+
+        # create aspect
+        outAspect = Aspect(demMosaic)
+        outAspect.save(aspect)
+        print("- aspect created")
+        arcpy.Clip_management(aspect, projectBoundary, aspect_clipped)
+        print("- aspect clipped")
+
+        # reclass aspect and make polygons
+        reclass_aspect = Reclassify(aspect_clipped, "Value",
+                                    RemapRange([[0, 22.5, 1], [22.5, 67.5, 2], [67.5, 112.5, 3],
+                                                [112.5, 157.5, 4], [157.5, 202.5, 5],
+                                                [202.5, 247.5, 6], [247.5, 292.5, 7],
+                                                [292.5, 337.5, 8], [337.5, 360, 9]]))
+        reclass_aspect.save(aspectReclass)
+        print("- aspect reclassified")
+
+        # add field to aspect and correlate names to numbers
+        arcpy.AddField_management(aspectReclass, "Compass", "TEXT", "", "", 20, "Compass")
+        print("- new field created")
+
+        # update cursor
+        fc = aspectReclass
+        fields = ["Value", "Compass"]
+        with arcpy.da.UpdateCursor(fc, fields) as cursor:
+            for row in cursor:
+                if row[0] == 1:
+                    row[1] = "North"
+                if row[0] == 2:
+                    row[1] = "Northeast"
+                if row[0] == 3:
+                    row[1] = "East"
+                if row[0] == 4:
+                    row[1] = "Southeast"
+                if row[0] == 5:
+                    row[1] = "South"
+                if row[0] == 6:
+                    row[1] = "Southwest"
+                if row[0] == 7:
+                    row[1] = "West"
+                if row[0] == 8:
+                    row[1] = "Northwest"
+                if row[0] == 9:
+                    row[1] = "North"
+                if row[0] == -1:
+                    row[1] = "Flat"
+                cursor.updateRow(row)
+        print("field updated")
+
+        # make aspect polygons
+        aspectPolygons = terrainWorkspace + "\\AvyAspect_Polygons.shp"
+        arcpy.RasterToPolygon_conversion(aspectReclass, aspectPolygons)
+        print("- aspect polygons created")
+    except Exception as ex:
+        print(ex)
+    try:
+        # set curvature parameters
+        curvature = gdbName + "\\curvature"
+        curvature_clipped = terrainWorkspace + "\\Curvature_Clipped.tif"
+
+        # create curvature
+        outCurve = Curvature(demMosaic)
+        outCurve.save(curvature)
+        print("- curvature created")
+        arcpy.Clip_management(curvature, projectBoundary, curvature_clipped)
+        print("- curvature clipped")
+    except Exception as ex:
+        print(ex)
+    try:
+        slope = gdbName + "\\slope"
+        curvature = gdbName + "\\curvature"
+        aspect = gdbName + "\\aspect"
+
+        # delete major files
+        arcpy.Delete_management([slope, aspect, curvature])
+        print("- deleted un-clipped data")
+    except Exception as ex:
+        print(ex)
+except Exception as ex:
+    print(ex)
+print("slope, aspect, curvature fields created. Sweet!")
+
+# create ndvi polygons
+print("creating vegetation variables that will be important for runout information ... ")
+try:
+    # trying 2017 NDVI
+    try:
+        # establish parameters for ndvi
+        ndviWorkspace = arcpy.env.workspace + "\\LandsatNDVI"
+        terrainWorkspace = arcpy.env.workspace + "\\Terrain"
+        landsat2017file = ndviWorkspace + "\\2017\\LC08_L1TP_035034_20170106_20200905_02_T1_MTL.txt"
+        ndvi2017file = outputData + "\\ndvi2017File.tif"
+        try:
+            # process ndvi file
+            ndvi_raster = arcpy.ia.NDVI(landsat2017file, 5, 4)
+            ndvi_raster.save(ndvi2017file)
+            print("- 2017 NDVI raster created and saved")
+
+            # clip ndvi file
+            ndvi2017_clip = ndviWorkspace + "\\ndvi2017_clip.tif"
+            arcpy.Clip_management(ndvi2017file, projectBoundary, ndvi2017_clip)
+            print("- ndvi file clipped")
+
+            # reclassify ndvi file
+            reclass_ndvi2017 = Reclassify(ndvi2017_clip, "Value", RemapRange([[-1, 0, "NODATA"], [0, 0.1, 1],
+                                                                              [0.1, 0.5, 2], [0.5, 1, 3]]))
+            reclass_ndvi2017.save(ndviWorkspace + "\\ndvi2017_clip_reclass.tif")
+            print("- ndvi 2017 reclassified")
+
+            # add field
+            reclass_ndvi2017 = ndviWorkspace + "\\ndvi2017_clip_reclass.tif"
+            arcpy.AddField_management(reclass_ndvi2017, "VEG_DESC", "TEXT", "", "", 35, "VEG_DESC")
+            print("- field created")
+
+            # update cursor
+            fc = reclass_ndvi2017
+            fields = ["Value", "VEG_DESC"]
+            with arcpy.da.UpdateCursor(fc, fields) as cursor:
+                for row in cursor:
+                    if row[0] == 1:
+                        row[1] = "Bare Earth"
+                    if row[0] == 2:
+                        row[1] = "Sparse Vegetation"
+                    if row[0] == 3:
+                        row[1] = "Heavy Vegetation"
+                    cursor.updateRow(row)
+            print("- field updated")
+
+            # # convert to polygons
+            ndvi2017_polygons = ndviWorkspace + "\\ndvi2017_polygons.shp"
+            arcpy.RasterToPolygon_conversion(reclass_ndvi2017, ndvi2017_polygons)
+            print("- shapefile for 2017 converted to polygons")
+        except Exception as ex:
+            print(ex)
+    except Exception as ex:
+        print(ex)
+
+    # trying 2018 NDVI
+    try:
+        # establish parameters for ndvi
+        ndviWorkspace = arcpy.env.workspace + "\\LandsatNDVI"
+        terrainWorkspace = arcpy.env.workspace + "\\Terrain"
+        landsat2018file = ndviWorkspace + "\\2018\\LC08_L1TP_035034_20180226_20200902_02_T1_MTL.txt"
+        ndvi2018file = outputData + "\\ndvi2018File.tif"
+        try:
+            # process ndvi file
+            ndvi_raster = arcpy.ia.NDVI(landsat2018file, 5, 4)
+            ndvi_raster.save(ndvi2018file)
+            print("- 2018 NDVI raster created and saved")
+
+            # clip ndvi file
+            ndvi2018_clip = ndviWorkspace + "\\ndvi2018_clip.tif"
+            arcpy.Clip_management(ndvi2018file, projectBoundary, ndvi2018_clip)
+            print("- 2018 ndvi file clipped")
+
+            # reclassify ndvi file
+            reclass_ndvi2018 = Reclassify(ndvi2018_clip, "Value", RemapRange([[-1, 0, "NODATA"], [0, 0.1, 1],
+                                                                              [0.1, 0.5, 2], [0.5, 1, 3]]))
+            reclass_ndvi2018.save(ndviWorkspace + "\\ndvi2018_clip_reclass.tif")
+            print("- 2018 ndvi reclassified")
+
+            # add field
+            reclass_ndvi2018 = ndviWorkspace + "\\ndvi2018_clip_reclass.tif"
+            arcpy.AddField_management(reclass_ndvi2018, "VEG_DESC", "TEXT", "", "", 35, "VEG_DESC")
+            print("- field created")
+
+            # update cursor
+            fc = reclass_ndvi2018
+            fields = ["Value", "VEG_DESC"]
+            with arcpy.da.UpdateCursor(fc, fields) as cursor:
+                for row in cursor:
+                    if row[0] == 1:
+                        row[1] = "Bare Earth"
+                    if row[0] == 2:
+                        row[1] = "Sparse Vegetation"
+                    if row[0] == 3:
+                        row[1] = "Heavy Vegetation"
+                    cursor.updateRow(row)
+            print("- field updated")
+
+            # # convert to polygons
+            ndvi2018_polygons = ndviWorkspace + "\\ndvi2018_polygons.shp"
+            arcpy.RasterToPolygon_conversion(reclass_ndvi2018, ndvi2018_polygons)
+            print("- shapefile for 2018 converted to polygons")
+        except Exception as ex:
+            print(ex)
+    except Exception as ex:
+        print(ex)
+
+    # trying 2019 NDVI
+    try:
+        # establish parameters for ndvi
+        ndviWorkspace = arcpy.env.workspace + "\\LandsatNDVI"
+        terrainWorkspace = arcpy.env.workspace + "\\Terrain"
+        landsat2019file = ndviWorkspace + "\\2019\\LC08_L1TP_035034_20190128_20200829_02_T1_MTL.txt"
+        ndvi2019file = outputData + "\\ndvi2019File.tif"
+        try:
+            # process ndvi file
+            ndvi_raster = arcpy.ia.NDVI(landsat2019file, 5, 4)
+            ndvi_raster.save(ndvi2019file)
+            print("- 2019 NDVI raster created and saved")
+
+            # clip ndvi file
+            ndvi2019_clip = ndviWorkspace + "\\ndvi2019_clip.tif"
+            arcpy.Clip_management(ndvi2019file, projectBoundary, ndvi2019_clip)
+            print("- 2019 ndvi file clipped")
+
+            # reclassify ndvi file
+            reclass_ndvi2019 = Reclassify(ndvi2019_clip, "Value", RemapRange([[-1, 0, "NODATA"], [0, 0.1, 1],
+                                                                              [0.1, 0.5, 2], [0.5, 1, 3]]))
+            reclass_ndvi2019.save(ndviWorkspace + "\\ndvi2019_clip_reclass.tif")
+            print("- ndvi 2019 reclassified")
+
+            # add field
+            reclass_ndvi2019 = ndviWorkspace + "\\ndvi2019_clip_reclass.tif"
+            arcpy.AddField_management(reclass_ndvi2019, "VEG_DESC", "TEXT", "", "", 35, "VEG_DESC")
+            print("- field created")
+
+            # update cursor
+            fc = reclass_ndvi2019
+            fields = ["Value", "VEG_DESC"]
+            with arcpy.da.UpdateCursor(fc, fields) as cursor:
+                for row in cursor:
+                    if row[0] == 1:
+                        row[1] = "Bare Earth"
+                    if row[0] == 2:
+                        row[1] = "Sparse Vegetation"
+                    if row[0] == 3:
+                        row[1] = "Heavy Vegetation"
+                    cursor.updateRow(row)
+            print("- field updated")
+
+            # # convert to polygons
+            ndvi2019_polygons = ndviWorkspace + "\\ndvi2019_polygons.shp"
+            arcpy.RasterToPolygon_conversion(reclass_ndvi2019, ndvi2019_polygons)
+            print("- shapefile for 2019 converted to polygons")
+        except Exception as ex:
+            print(ex)
+    except Exception as ex:
+        print(ex)
+
+    # trying 2020 NDVI
+    try:
+        # establish parameters for ndvi
+        ndviWorkspace = arcpy.env.workspace + "\\LandsatNDVI"
+        terrainWorkspace = arcpy.env.workspace + "\\Terrain"
+        landsat2020file = ndviWorkspace + "\\2020\\LC08_L1TP_035034_20200115_20200823_02_T1_MTL.txt"
+        ndvi2020file = outputData + "\\ndvi2020File.tif"
+        try:
+            # process ndvi file
+            ndvi_raster = arcpy.ia.NDVI(landsat2020file, 5, 4)
+            ndvi_raster.save(ndvi2020file)
+            print("- 2020 NDVI raster created and saved")
+
+            # clip ndvi file
+            ndvi2020_clip = ndviWorkspace + "\\ndvi2020_clip.tif"
+            arcpy.Clip_management(ndvi2020file, projectBoundary, ndvi2020_clip)
+            print("- 2020 ndvi file clipped")
+
+            # reclassify ndvi file
+            reclass_ndvi2020 = Reclassify(ndvi2020_clip, "Value", RemapRange([[-1, 0, "NODATA"], [0, 0.1, 1],
+                                                                              [0.1, 0.5, 2], [0.5, 1, 3]]))
+            reclass_ndvi2020.save(ndviWorkspace + "\\ndvi2020_clip_reclass.tif")
+            print("- 2020 ndvi reclassified")
+
+            # add field
+            reclass_ndvi2020 = ndviWorkspace + "\\ndvi2020_clip_reclass.tif"
+            arcpy.AddField_management(reclass_ndvi2020, "VEG_DESC", "TEXT", "", "", 35, "VEG_DESC")
+            print("- field created")
+
+            # update cursor
+            fc = reclass_ndvi2020
+            fields = ["Value", "VEG_DESC"]
+            with arcpy.da.UpdateCursor(fc, fields) as cursor:
+                for row in cursor:
+                    if row[0] == 1:
+                        row[1] = "Bare Earth"
+                    if row[0] == 2:
+                        row[1] = "Sparse Vegetation"
+                    if row[0] == 3:
+                        row[1] = "Heavy Vegetation"
+                    cursor.updateRow(row)
+            print("- field updated")
+
+            # # convert to polygons
+            ndvi2020_polygons = ndviWorkspace + "\\ndvi2020_polygons.shp"
+            arcpy.RasterToPolygon_conversion(reclass_ndvi2020, ndvi2020_polygons)
+            print("- shapefile for 2020 converted to polygons")
+        except Exception as ex:
+            print(ex)
+    except Exception as ex:
+        print(ex)
+
+    # trying 2022 NDVI
+    try:
+        # establish parameters for ndvi
+        ndviWorkspace = arcpy.env.workspace + "\\LandsatNDVI"
+        terrainWorkspace = arcpy.env.workspace + "\\Terrain"
+        landsat2022file = ndviWorkspace + "\\2022\\LC09_L1TP_035034_20220128_20230430_02_T1_MTL.txt"
+        ndvi2022file = outputData + "\\ndvi2022File.tif"
+        try:
+            # process ndvi file
+            ndvi_raster = arcpy.ia.NDVI(landsat2022file, 5, 4)
+            ndvi_raster.save(ndvi2022file)
+            print("- 2022 NDVI raster created and saved")
+
+            # clip ndvi file
+            ndvi2022_clip = ndviWorkspace + "\\ndvi2022_clip.tif"
+            arcpy.Clip_management(ndvi2022file, projectBoundary, ndvi2022_clip)
+            print("- 2022 ndvi file clipped")
+
+            # reclassify ndvi file
+            reclass_ndvi2022 = Reclassify(ndvi2022_clip, "Value", RemapRange([[-1, 0, "NODATA"], [0, 0.1, 1],
+                                                                              [0.1, 0.5, 2], [0.5, 1, 3]]))
+            reclass_ndvi2022.save(ndviWorkspace + "\\ndvi2022_clip_reclass.tif")
+            print("- ndvi 2022 reclassified")
+
+            # add field
+            reclass_ndvi2022 = ndviWorkspace + "\\ndvi2022_clip_reclass.tif"
+            arcpy.AddField_management(reclass_ndvi2022, "VEG_DESC", "TEXT", "", "", 35, "VEG_DESC")
+            print("- field created")
+
+            # update cursor
+            fc = reclass_ndvi2022
+            fields = ["Value", "VEG_DESC"]
+            with arcpy.da.UpdateCursor(fc, fields) as cursor:
+                for row in cursor:
+                    if row[0] == 1:
+                        row[1] = "Bare Earth"
+                    if row[0] == 2:
+                        row[1] = "Sparse Vegetation"
+                    if row[0] == 3:
+                        row[1] = "Heavy Vegetation"
+                    cursor.updateRow(row)
+            print("- field updated")
+
+            # # convert to polygons
+            ndvi2022_polygons = ndviWorkspace + "\\ndvi2022_polygons.shp"
+            arcpy.RasterToPolygon_conversion(reclass_ndvi2022, ndvi2022_polygons)
+            print("- shapefile for 2022 converted to polygons")
+        except Exception as ex:
+            print(ex)
+    except Exception as ex:
+        print(ex)
+except Exception as ex:
+    print(ex)
+print("vegetation classifications and polygons created. Woo!")
+
+# create geomorphon file
+print("creating geomorphon file and polygons ... ")
+try:
+    # establish parameters
+    demMosaic = gdbName + "\\demMosaic2"
+    demFiles = arcpy.env.workspace + "\\DEM"
+    terrainWorkspace = arcpy.env.workspace + "\\Terrain"
+    geomorphonRaster = terrainWorkspace + "\\GeomorphonLandforms.tif"
+    geomorphonClipped = terrainWorkspace + "\\Geomorphon_Clipped.tif"
+    geomorphonPolygons = terrainWorkspace + "\\GeomorphonPolygons.shp"
+
+    # run tool
+    try:
+        outGeomorphLandforms = GeomorphonLandforms(demMosaic, "", "", "METERS")
+        outGeomorphLandforms.save(geomorphonRaster)
+        print("- geomorphon raster created")
+
+        # clip raster
+        arcpy.Clip_management(geomorphonRaster, projectBoundary, geomorphonClipped)
+        print("- geomorphon clipped")
+
+        # add field and edit field
+        arcpy.AddField_management(geomorphonClipped, "FEAT_DESC", "TEXT", "", "", 15, "FEAT_DESC", "NULLABLE", "REQUIRED")
+        print("- field added ")
+
+        # adjust field
+        fc = geomorphonClipped
+        fields = ["Value", "FEAT_DESC"]
+        with arcpy.da.UpdateCursor(fc, fields) as cursor:
+            for row in cursor:
+                if row[0] == 1:
+                    row[1] = "Flat"
+                if row[0] == 2:
+                    row[1] = "Peak"
+                if row[0] == 3:
+                    row[1] = "Ridge"
+                if row[0] == 4:
+                    row[1] = "Shoulder"
+                if row[0] == 5:
+                    row[1] = "Spur"
+                if row[0] == 6:
+                    row[1] = "Slope"
+                if row[0] == 7:
+                    row[1] = "Hollow"
+                if row[0] == 8:
+                    row[1] = "Footslope"
+                if row[0] == 9:
+                    row[1] = "Valley"
+                if row[0] == 10:
+                    row[1] = "Pit"
+                cursor.updateRow(row)
+        print("- field updated")
+
+        # create polygons
+        arcpy.RasterToPolygon_conversion(geomorphonClipped, geomorphonPolygons)
+        print("- geomorphon polygons created")
+    except Exception as ex:
+        print(ex)
+    # delete unused files
+    try:
+        arcpy.Delete_management(geomorphonRaster)
+    except Exception as ex:
+        print(ex)
+except Exception as ex:
+    print(ex)
+print("geomorphon landforms established. Good job!")
+
