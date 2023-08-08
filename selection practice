@@ -1,0 +1,84 @@
+# selection practice
+
+# import directories
+import arcpy
+from datetime import date
+from datetime import datetime as dt
+from datetime import timedelta
+print("imported modules")
+
+print("establishing parameters ... ")
+# set master workspace and overwrite conditions
+arcpy.env.workspace = "C:\\Users\\Emma Tyrrell\\Documents\\PSU_SDS\\THESIS_230226\\Data\\WorkingData"
+gdbName = "C:\\Users\\Emma Tyrrell\\Documents\\PSU_SDS\\THESIS_230226\\Data\\StaticDataGDB.gdb"
+projectBoundary = gdbName + "\\ProjectBoundary"
+outputData = arcpy.env.workspace + "\\OutputProcessing"
+mosaicBit = 1
+mosaicPixelType = "32_BIT_FLOAT"
+GCSsr = arcpy.SpatialReference(4326)
+PCSsr = arcpy.SpatialReference(6431)
+arcpy.env.overwriteOutput = True
+arcpy.env.qualifiedFieldNames = False
+AvyDataWorkspace = arcpy.env.workspace + "\\AvyData"
+masterAvyPointClass = AvyDataWorkspace + "\\MasterAvyPointClass.shp"
+highwayAvyData = AvyDataWorkspace + "\\HighwayAvalanches.shp"
+print("parameters established.")
+
+# add field
+try:
+    arcpy.AddField_management(masterAvyPointClass, "StdDate", "TEXT", "", "", "50", "TEXT")
+    print("field added")
+
+    arcpy.AddField_management(masterAvyPointClass, "FullDate", "TEXT", "", "", "", "FullDate", "", "REQUIRED")
+    print("full date field created")
+
+    # calculate date field
+    dateExpression = "'!Year!' + '-' + '!Month!' + '-' + '!Day!'"
+    arcpy.CalculateField_management(masterAvyPointClass, "FullDate", dateExpression, "PYTHON3")
+    print("date calculated")
+
+    # add approx time field
+    arcpy.AddField_management(masterAvyPointClass, "ApproxTime", "TEXT", "", "", "", "ApproxTime", "", "REQUIRED")
+    print("approx time field created")
+
+    # calculate Approx Time Field
+    timeExpression = "'12:00:00'"
+    arcpy.CalculateField_management(masterAvyPointClass, "ApproxTime", timeExpression, "PYTHON3")
+    print("time calculated")
+
+except Exception as ex:
+    print(ex)
+
+try:
+    fc = masterAvyPointClass
+    fields = ["FullDate", "StdDate"]
+    with arcpy.da.UpdateCursor(fc, fields) as cursor:
+        for row in cursor:
+            date_object = dt.strptime(row[0], "%Y-%m-%d")
+            row[1] = date_object
+            print(date_object)
+            cursor.updateRow(row)
+
+    start_date = date(2022, 1, 1)
+    end_date = date(2022, 1, 31)
+    delta = timedelta(days=1)
+    while start_date <= end_date:
+        print(start_date, end="\n")
+        date_object = dt.strptime(str(start_date), "%Y-%m-%d")
+        where_clause = f"""StdDate = '{start_date} 00:00:00'"""
+        timeSelect = f"{start_date}"
+        dateFeatures = arcpy.SelectLayerByAttribute_management(masterAvyPointClass, "SUBSET_SELECTION", where_clause)
+        print("selected")
+        arcpy.CopyFeatures_management(dateFeatures, (AvyDataWorkspace + "\\2022\\" + timeSelect + ".shp"))
+        print("copied")
+        start_date += delta
+    try:
+        shapefiles2022 = AvyDataWorkspace + "\\2022"
+        for file in shapefiles2022:
+            if arcpy.GetCount_management(file)[0] == "0":
+                arcpy.Delete_management(file)
+        print("non-avy day files deleted")
+    except Exception as ex:
+        print(ex)
+except Exception as ex:
+    print(ex)
