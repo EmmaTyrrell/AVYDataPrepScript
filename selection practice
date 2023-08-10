@@ -1,20 +1,20 @@
-# selection practice
+# this is a test sample for the points
 
-# import directories
+# import modules
 import arcpy
+from arcpy.sa import *
 from datetime import date
 from datetime import datetime as dt
 from datetime import timedelta
-print("imported modules")
+print("modules imported.")
 
-print("establishing parameters ... ")
-# set master workspace and overwrite conditions
+# establishing parameters
+print("establishing parameters and workspaces ...")
 arcpy.env.workspace = "C:\\Users\\Emma Tyrrell\\Documents\\PSU_SDS\\THESIS_230226\\Data\\WorkingData"
 gdbName = "C:\\Users\\Emma Tyrrell\\Documents\\PSU_SDS\\THESIS_230226\\Data\\StaticDataGDB.gdb"
+avyGDB = "C:\\Users\\Emma Tyrrell\\Documents\\PSU_SDS\\THESIS_230226\\Data\\WorkingData\\AvalancheFiles.gdb"
 projectBoundary = gdbName + "\\ProjectBoundary"
 outputData = arcpy.env.workspace + "\\OutputProcessing"
-mosaicBit = 1
-mosaicPixelType = "32_BIT_FLOAT"
 GCSsr = arcpy.SpatialReference(4326)
 PCSsr = arcpy.SpatialReference(6431)
 arcpy.env.overwriteOutput = True
@@ -22,62 +22,153 @@ arcpy.env.qualifiedFieldNames = False
 AvyDataWorkspace = arcpy.env.workspace + "\\AvyData"
 masterAvyPointClass = AvyDataWorkspace + "\\MasterAvyPointClass.shp"
 highwayAvyData = AvyDataWorkspace + "\\HighwayAvalanches.shp"
-print("parameters established.")
+UTCtimeConversion = timedelta(hours=-7)
+print("parameters and workspaces established.")
 
-# add field
+# create shapefiles for each day there was an avalanche 2017
+print("creating avalanche point class ... ")
 try:
-    arcpy.AddField_management(masterAvyPointClass, "StdDate", "TEXT", "", "", "50", "TEXT")
-    print("field added")
+    # establish local parameters
+    AvyTable = arcpy.env.workspace + "\\AvyData\\2017-2020Avalanches.csv"
+    AvyDataWorkspace = arcpy.env.workspace + "\\AvyData"
+    outAvyPointClass = outputData + "\\AvyPointClass.shp"
+    projectedAvyOutPointClass = outputData + "\\AvyPointClass_projected.shp"
+    masterAvyPointClass = AvyDataWorkspace + "\\MasterAvyPointClass.shp"
+    AvalanchesData = AvyDataWorkspace + "\\Avalanches.shp"
+    xField = "X_Coord"
+    yField = "Y_Coord"
+    try:
+        # run tool for XY class
+        arcpy.XYTableToPoint_management(AvyTable, outAvyPointClass, xField, yField, "", GCSsr)
+        print("- point class created")
 
-    arcpy.AddField_management(masterAvyPointClass, "FullDate", "TEXT", "", "", "", "FullDate", "", "REQUIRED")
-    print("full date field created")
+        # project class into proper coordinate system
+        arcpy.Project_management(outAvyPointClass, projectedAvyOutPointClass, PCSsr)
+        print("- coordinate system projected")
 
-    # calculate date field
-    dateExpression = "'!Year!' + '-' + '!Month!' + '-' + '!Day!'"
-    arcpy.CalculateField_management(masterAvyPointClass, "FullDate", dateExpression, "PYTHON3")
-    print("date calculated")
+        # clip points to boundary to create master file
+        arcpy.Clip_analysis(projectedAvyOutPointClass, projectBoundary, AvalanchesData)
+        print("- clipped avy feature")
 
-    # add approx time field
-    arcpy.AddField_management(masterAvyPointClass, "ApproxTime", "TEXT", "", "", "", "ApproxTime", "", "REQUIRED")
-    print("approx time field created")
+        # add field that will be in accordance with the date field
+        arcpy.AddField_management(AvalanchesData, "FullDate", "TEXT", "", "", "50", "FullDate", "", "REQUIRED")
+        print("- full date field created")
+        arcpy.AddField_management(AvalanchesData, "StdStart", "TEXT", "", "", "50", "StdStart", "", "REQUIRED")
+        print("- start date field added")
+        arcpy.AddField_management(AvalanchesData, "StdDay0", "TEXT", "", "", "50", "StdDay0", "", "REQUIRED")
+        print("field added")
+        arcpy.AddField_management(AvalanchesData, "StdDay_1", "TEXT", "", "", "50", "StdDay_1", "", "REQUIRED")
+        print("field added")
+        arcpy.AddField_management(AvalanchesData, "StdDay_2", "TEXT", "", "", "50", "StdDay_2", "", "REQUIRED")
+        print("field added")
+        arcpy.AddField_management(AvalanchesData, "StdDay_3", "TEXT", "", "", "50", "StdDay_3", "", "REQUIRED")
+        print("field added")
+        arcpy.AddField_management(AvalanchesData, "StdDay_4", "TEXT", "", "", "50", "StdDay_4", "", "REQUIRED")
+        print("field added")
+        arcpy.AddField_management(AvalanchesData, "StdDay_5", "TEXT", "", "", "50", "StdDay_5", "", "REQUIRED")
+        print("field added")
+        arcpy.AddField_management(AvalanchesData, "StdDay_6", "TEXT", "", "", "50", "StdDay_6", "", "REQUIRED")
+        print("field added")
+        arcpy.AddField_management(AvalanchesData, "StdDay_7", "TEXT", "", "", "50", "StdDay_7", "", "REQUIRED")
+        print("field added")
 
-    # calculate Approx Time Field
-    timeExpression = "'12:00:00'"
-    arcpy.CalculateField_management(masterAvyPointClass, "ApproxTime", timeExpression, "PYTHON3")
-    print("time calculated")
+        # Calculate FullDate field
+        fc = AvalanchesData
+        fields = ['Year', 'Month', 'Day', "FullDate", "StdStart", "StdDay0", "StdDay_1", "StdDay_2", "StdDay_3",
+                  "StdDay_4", "StdDay_5", "StdDay_6", "StdDay_7"]
+        with arcpy.da.UpdateCursor(fc, fields) as cursor:
+            for row in cursor:
+                month = f"0{row[1]}" if row[1] <= 9 else row[1]
+                days = f"0{row[2]}" if row[2] <= 9 else row[2]
+                row[3] = f"{row[0]}-{month}-{days} 00:00:00"
+                cursor.updateRow(row)
+                row[4] = row[3]
+                cursor.updateRow(row)
+                row[4] = dt.strptime(row[4], "%Y-%m-%d %H:%M:%S")
+                cursor.updateRow(row)
+                row[4] = row[4] + UTCtimeConversion
+                cursor.updateRow(row)
+                row[5] = row[4] + timedelta(days=1)
+                row[6] = row[4] + timedelta(days=-1)
+                row[7] = row[4] + timedelta(days=-2)
+                row[8] = row[4] + timedelta(days=-3)
+                row[9] = row[4] + timedelta(days=-4)
+                row[10] = row[4] + timedelta(days=-5)
+                row[11] = row[4] + timedelta(days=-6)
+                row[12] = row[4] + timedelta(days=-7)
+                cursor.updateRow(row)
+                row4 = str(row[4])
+                row5 = str(row[5])
+                row6 = str(row[6])
+                row7 = str(row[7])
+                row8 = str(row[8])
+                row9 = str(row[9])
+                row10 = str(row[10])
+                row11 = str(row[11])
+                row12 = str(row[12])
+                row[4] = row4.replace(" ", "T")
+                row[5] = row5.replace(" ", "T")
+                row[6] = row6.replace(" ", "T")
+                row[7] = row7.replace(" ", "T")
+                row[8] = row8.replace(" ", "T")
+                row[9] = row9.replace(" ", "T")
+                row[10] = row10.replace(" ", "T")
+                row[11] = row11.replace(" ", "T")
+                row[12] = row12.replace(" ", "T")
+                cursor.updateRow(row)
+                print(row[4])
+        print("- field Full Date Updated")
 
+        # delete intermediary data
+        arcpy.Delete_management([projectedAvyOutPointClass, outAvyPointClass])
+        print("- deleted unclipped data")
+    except Exception as ex:
+        print(ex)
 except Exception as ex:
     print(ex)
 
+print("selecting and sampling 2017 avalanche data ... ")
 try:
-    fc = masterAvyPointClass
-    fields = ["FullDate", "StdDate"]
-    with arcpy.da.UpdateCursor(fc, fields) as cursor:
-        for row in cursor:
-            date_object = dt.strptime(row[0], "%Y-%m-%d")
-            row[1] = date_object
-            print(date_object)
-            cursor.updateRow(row)
+    AvalanchesData = AvyDataWorkspace + "\\Avalanches.shp"
+    AvyDataWorkspace = arcpy.env.workspace + "\\AvyData"
+    Sampled2017 = AvyDataWorkspace + "\\2017\\Sampled"
+    meanHRRRFile17 = arcpy.env.workspace + "\\HRRRData\\2017\\2017meanHRRRVariables.crf"
+    minHRRRFile17 = arcpy.env.workspace + "\\HRRRData\\2017\\2017minHRRRVariables.crf"
+    maxHRRRFile17 = arcpy.env.workspace + "\\HRRRData\\2017\\2017maxHRRRVariables.crf"
+    sumHRRRFile17 = arcpy.env.workspace + "\\HRRRData\\2017\\2017sumHRRRVariables.crf"
+    windHRRRFile17 = arcpy.env.workspace + "\\HRRRData\\2017\\2017windDirecHRRRVariables.crf"
 
-    start_date = date(2022, 1, 1)
-    end_date = date(2022, 1, 31)
-    delta = timedelta(days=1)
-    while start_date <= end_date:
-        print(start_date, end="\n")
-        date_object = dt.strptime(str(start_date), "%Y-%m-%d")
-        where_clause = f"""StdDate = '{start_date} 00:00:00'"""
-        timeSelect = f"{start_date}"
-        dateFeatures = arcpy.SelectLayerByAttribute_management(masterAvyPointClass, "SUBSET_SELECTION", where_clause)
-        print("selected")
-        arcpy.CopyFeatures_management(dateFeatures, (AvyDataWorkspace + "\\2022\\" + timeSelect + ".shp"))
-        print("copied")
-        start_date += delta
+    # setting the field to the correct date format
     try:
-        shapefiles2022 = AvyDataWorkspace + "\\2022"
-        for file in shapefiles2022:
-            if arcpy.GetCount_management(file)[0] == "0":
-                arcpy.Delete_management(file)
-        print("non-avy day files deleted")
+        start_date = date(2017, 1, 1)
+        end_date = date(2017, 1, 7)
+        delta = timedelta(days=1)
+        while start_date <= end_date:
+            print(start_date, end="\n")
+            date_object = dt.strptime(str(start_date), "%Y-%m-%d")
+            where_clause = f"""FullDate = '{start_date} 00:00:00'"""
+            timeSelect = f"{start_date}"
+            dateFeatures = arcpy.SelectLayerByAttribute_management(AvalanchesData, "NEW_SELECTION", where_clause)
+            print("selected")
+            if int(arcpy.GetCount_management(dateFeatures).getOutput(0)) > 0:
+                arcpy.CopyFeatures_management(dateFeatures, (AvyDataWorkspace + "\\2017\\" + f"{timeSelect}.shp"))
+                print("copied")
+            start_date += delta
+    except Exception as ex:
+        print(ex)
+
+    # try to loop through the fields
+    try:
+        arcpy.env.workspace = AvyDataWorkspace + "\\2017"
+        avyFiles2017 = arcpy.ListFeatureClasses()
+        for avyFile in avyFiles2017:
+            print(avyFile)
+            with arcpy.da.SearchCursor(avyFile, ["StdStart", "StdDay0"]) as cursor:
+                for row in cursor:
+                    Sample(meanHRRRFile17, avyFile, (Sampled2017 + "\\" + f"{avyFile}_SumSampledDayOf.shp"),
+                           "NEAREST", "FID", "ALL_SLICES", f"StdTime {row[0]} {row[1]}", "MEAN", "", "", "ROW_WISE",
+                           "FEATURE_CLASS")
+                    print(avyFile + " day of sampled")
     except Exception as ex:
         print(ex)
 except Exception as ex:
